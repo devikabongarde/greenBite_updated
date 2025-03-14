@@ -71,9 +71,9 @@ function NGOPage() {
           <img 
             src="/icon.png" 
             alt="GreenBite Logo" 
-            className="h-8 w-8 object-contain bg-green-100/80 p-1.5 rounded-lg
+            className="h-8 w-8 object-contain bg-green-800/80 p-1.5 rounded-lg
                        transform transition-all duration-300 hover:scale-105
-                       shadow-sm hover:shadow-md hover:bg-green-200/80"
+                       shadow-sm hover:shadow-md"
           />
           <h1 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-blue-600 bg-clip-text text-transparent
                          transform transition-all duration-300 hover:scale-105">

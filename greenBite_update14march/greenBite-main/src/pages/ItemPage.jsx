@@ -1,3 +1,5 @@
+import axios from "axios";
+import { useRef, useState, useEffect } from "react";
 import { AppSidebar } from "@/components/ui/app-sidebar";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -19,9 +21,7 @@ import {
 } from "@/components/ui/popover";
 import { Separator } from "@/components/ui/separator";
 import {
-  SidebarInset,
   SidebarProvider,
-  SidebarTrigger,
 } from "@/components/ui/sidebar";
 import {
   Table,
@@ -31,34 +31,43 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { differenceInDays, format } from "date-fns";
+import { differenceInDays, format, addDays } from "date-fns";
 import { onValue, push, ref, set, update } from "firebase/database";
-import { Calendar as CalendarIcon, Trash2, Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Camera, Calendar as CalendarIcon, Trash2 } from "lucide-react";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
 import { database, auth } from "../firebaseConfig.js";
-import { useRef } from "react";
-
 
 function ItemPage() {
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [detectedItems, setDetectedItems] = useState([]);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
   const [foodItems, setFoodItems] = useState([]);
   const [newItem, setNewItem] = useState({
     name: "",
     quantity: "",
     expiryDate: null,
   });
-  const [isUploading, setIsUploading] = useState(false); // To handle loading state during image upload
 
-  // Assuming you have a user authentication system in place, get the current user's ID
-const user = auth.currentUser;
-const userId = user ? user.uid : null;
-
-  const alertedItemsRef = useRef(new Set()); // Store already alerted items
+  const user = auth.currentUser;
+  const userId = user ? user.uid : null;
+  const alertedItemsRef = useRef(new Set());
 
   useEffect(() => {
+    // Cleanup function to stop camera when component unmounts
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+
     const foodItemsRef = ref(database, `users/${userId}/foodItems`);
-    onValue(foodItemsRef, (snapshot) => {
+    const unsubscribe = onValue(foodItemsRef, (snapshot) => {
       const items = [];
       snapshot.forEach((childSnapshot) => {
         const item = { id: childSnapshot.key, ...childSnapshot.val() };
@@ -66,37 +75,129 @@ const userId = user ? user.uid : null;
       });
       setFoodItems(items);
 
-      // Check for expiring or expired items
+      // Check for expiring items
       items.forEach((item) => {
-        if (item.expiryDate) {
+        if (item.expiryDate && !alertedItemsRef.current.has(item.id)) {
           const daysLeft = differenceInDays(
             new Date(item.expiryDate),
             new Date()
           );
 
-          if (!alertedItemsRef.current.has(item.id)) {
-            if (daysLeft > 0 && daysLeft <= 7) {
-              // Expiring soon
-              toast.warn(`⚠️ ${item.name} is expiring in ${daysLeft} days!`, {
-                position: "top-center",
-                autoClose: 5000,
-              });
-            } else if (daysLeft < 0) {
-              // Already expired
-              toast.error(`❌ ${item.name} has expired!`, {
-                position: "top-center",
-                autoClose: 5000,
-              });
-            }
-            alertedItemsRef.current.add(item.id); // Mark as alerted
+          if (daysLeft > 0 && daysLeft <= 7) {
+            toast.warn(`⚠️ ${item.name} is expiring in ${daysLeft} days!`);
+          } else if (daysLeft < 0) {
+            toast.error(`❌ ${item.name} has expired!`);
           }
+          alertedItemsRef.current.add(item.id);
         }
       });
     });
+
+    return () => unsubscribe();
   }, [userId]);
 
-  const [editItem, setEditItem] = useState(null); // Store the item being edited
-  const [editingItem, setEditingItem] = useState(null);
+  const startCamera = async () => {
+    try {
+      const constraints = {
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: "environment"
+        }
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      videoRef.current.srcObject = stream;
+      streamRef.current = stream;
+      setIsCameraOpen(true);
+      await videoRef.current.play();
+    } catch (error) {
+      toast.error("Failed to access camera: " + error.message);
+    }
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraOpen(false);
+  };
+
+  const captureAndDetect = async () => {
+    if (!videoRef.current || !canvasRef.current) return;
+
+    try {
+      setIsProcessing(true);
+      const canvas = canvasRef.current;
+      const video = videoRef.current;
+      
+      // Set canvas dimensions to match video
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      
+      // Capture frame
+      const context = canvas.getContext("2d");
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      // Convert to blob
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg"));
+      const formData = new FormData();
+      formData.append("image", blob);
+
+      // Send to backend
+      const response = await axios.post("http://127.0.0.1:5000/predict", formData);
+      
+      if (response.data.predictions && response.data.predictions.length > 0) {
+        const detectedItem = response.data.predictions[0];
+        
+        // Add item to Firebase with default expiry date (7 days from now)
+        const defaultExpiryDate = format(addDays(new Date(), 7), "yyyy/MM/dd");
+        await addDetectedItemToInventory(detectedItem.item, defaultExpiryDate);
+        
+        toast.success(`Detected and added: ${detectedItem.item}`);
+      } else {
+        toast.warn("No items detected in image");
+      }
+    } catch (error) {
+      toast.error("Error during detection: " + error.message);
+      console.error("Detection error:", error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const addDetectedItemToInventory = async (itemName, expiryDate) => {
+    if (!userId) {
+      toast.error("Please login to add items");
+      return;
+    }
+
+    try {
+      const foodItemsRef = ref(database, `users/${userId}/foodItems`);
+      await push(foodItemsRef, {
+        name: itemName,
+        quantity: 1,
+        expiryDate: expiryDate,
+        addedDate: format(new Date(), "yyyy/MM/dd")
+      });
+      toast.success("Item added to inventory!");
+    } catch (error) {
+      toast.error("Failed to add item to inventory: " + error.message);
+    }
+  };
+
+  const handleDeleteItem = async (itemId) => {
+    try {
+      const itemRef = ref(database, `users/${userId}/foodItems/${itemId}`);
+      await set(itemRef, null);
+      toast.success("Item deleted successfully!");
+    } catch (error) {
+      toast.error("Failed to delete item: " + error.message);
+    }
+  };
 
   const handleEditClick = (item) => {
     setNewItem({
@@ -104,49 +205,30 @@ const userId = user ? user.uid : null;
       quantity: item.quantity,
       expiryDate: new Date(item.expiryDate),
     });
-    setEditingItem(item.id); // Store the item's ID to update instead of adding
   };
 
   const handleUpdateItem = (e) => {
     e.preventDefault();
-    if (!editingItem) return;
+    if (!newItem.name || !newItem.quantity || !newItem.expiryDate) {
+      toast.error("Please fill in all fields");
+      return;
+    }
   
-    const itemRef = ref(database, `users/${userId}/foodItems/${editingItem}`);
-    update(itemRef, {
+    const formattedExpiryDate = format(newItem.expiryDate, "yyyy/MM/dd");
+    const foodItemsRef = ref(database, `users/${userId}/foodItems`);
+    const newFoodItemRef = push(foodItemsRef);
+  
+    set(newFoodItemRef, {
       name: newItem.name,
       quantity: parseInt(newItem.quantity),
-      expiryDate: format(newItem.expiryDate, "yyyy/MM/dd"),
+      expiryDate: formattedExpiryDate,
     })
-      .then(() => {
-        toast.success("Food item updated successfully!");
-        setEditingItem(null);
-      })
-      .catch((error) => toast.error("Failed to update item: " + error.message));
+      .then(() => toast.success("Food item updated successfully!"))
+      .catch((error) => toast.error("Failed to update food item: " + error.message));
   
     setNewItem({ name: "", quantity: "", expiryDate: null });
   };
-  
 
-  const getExpiryStatus = (expiryDate) => {
-    if (!expiryDate)
-      return { label: "Unknown", color: "bg-gray-500 text-white" };
-
-    const daysLeft = differenceInDays(new Date(expiryDate), new Date());
-
-    if (daysLeft < 0)
-      return { label: "Expired", color: "bg-red-700 text-white" };
-    if (daysLeft <= 7)
-      return { label: "Expiring Soon", color: "bg-yellow-400 text-black" };
-
-    return { label: "Fresh", color: "bg-green-800 text-white" };
-  };
-
-  const toggleAlert = (itemId, currentStatus) => {
-    const itemRef = ref(database, `foodItems/${userId}/${itemId}`);
-    update(itemRef, { alertEnabled: !currentStatus });
-  };
-
-  // Handle adding a new food item to Firebase
   const handleSaveItem = (e) => {
     e.preventDefault();
     if (!newItem.name || !newItem.quantity || !newItem.expiryDate) {
@@ -168,23 +250,30 @@ const userId = user ? user.uid : null;
   
     setNewItem({ name: "", quantity: "", expiryDate: null });
   };
-  
 
-  // Handle deleting an item from Firebase
-  const handleDeleteItem = (itemId) => {
-    const itemRef = ref(database, `users/${userId}/foodItems/${itemId}`);
-    set(itemRef, null)
-      .then(() => toast.success("Item deleted"))
-      .catch((error) => toast.error("Failed to delete item: " + error.message));
+  const getExpiryStatus = (expiryDate) => {
+    if (!expiryDate)
+      return { label: "Unknown", color: "bg-gray-500 text-white" };
+
+    const daysLeft = differenceInDays(new Date(expiryDate), new Date());
+
+    if (daysLeft < 0)
+      return { label: "Expired", color: "bg-red-700 text-white" };
+    if (daysLeft <= 7)
+      return { label: "Expiring Soon", color: "bg-yellow-400 text-black" };
+
+    return { label: "Fresh", color: "bg-green-800 text-white" };
   };
-  
 
-  // Handle image upload and expiry date extraction
+  const toggleAlert = (itemId, currentStatus) => {
+    const itemRef = ref(database, `foodItems/${userId}/${itemId}`);
+    update(itemRef, { alertEnabled: !currentStatus });
+  };
+
   const handleImageUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
-    setIsUploading(true);
     const formData = new FormData();
     formData.append("file", file);
 
@@ -209,174 +298,191 @@ const userId = user ? user.uid : null;
       }
     } catch (error) {
       toast.error("Failed to process image: " + error.message);
-    } finally {
-      setIsUploading(false);
     }
   };
 
   return (
     <SidebarProvider>
-      <AppSidebar />
-      <SidebarInset>
-        <header className="flex h-16 shrink-0 items-center gap-2">
-          <div className="flex items-center gap-2 px-4">
-            <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="mr-2 h-4" />
+      <div className="flex min-h-screen">
+        <AppSidebar />
+        <div className="flex-1 p-8">
+          <div className="space-y-6">
             <Breadcrumb>
               <BreadcrumbList>
-                <BreadcrumbSeparator className="hidden md:block" />
-                <BreadcrumbItem className="hidden md:block">
-                  <BreadcrumbLink href="#">Items</BreadcrumbLink>
+                <BreadcrumbItem>
+                  <BreadcrumbLink href="/">Home</BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbLink href="/items">Items</BreadcrumbLink>
                 </BreadcrumbItem>
               </BreadcrumbList>
             </Breadcrumb>
-          </div>
-        </header>
-        <ToastContainer position="top-center" />
-        <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-          <div className="container mx-auto px-4 py-8 ">
-            <h1 className="text-3xl font-bold mb-6">Food Inventory Manager</h1>
 
-            <Card className="mb-8 max-w-xl">
-              <CardHeader>
-                <CardTitle>Add New Food Item</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleSaveItem} className="space-y-4">
-                  <div className="max-w-2xl">
-                    <div>
-                      <Label htmlFor="itemName">Food Item Name</Label>
-                      <Input
-                        id="itemName"
-                        value={newItem.name}
-                        onChange={(e) =>
-                          setNewItem({ ...newItem, name: e.target.value })
-                        }
-                        placeholder="Enter food item name"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="quantity">Quantity</Label>
-                      <Input
-                        id="quantity"
-                        type="number"
-                        value={newItem.quantity}
-                        onChange={(e) =>
-                          setNewItem({ ...newItem, quantity: e.target.value })
-                        }
-                        placeholder="Number of items"
-                      />
-                    </div>
-                    <div>
-                      <Label htmlFor="expiryDate">Expiry Date</Label>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant={"outline"}
-                            className={`w-full justify-start text-left font-normal ${
-                              !newItem.expiryDate && "text-muted-foreground"
-                            }`}
-                          >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
-                            {newItem.expiryDate
-                              ? format(newItem.expiryDate, "PPP")
-                              : "Pick a date"}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0">
-                          <Calendar
-                            mode="single"
-                            selected={newItem.expiryDate}
-                            onSelect={(date) =>
-                              setNewItem({ ...newItem, expiryDate: date })
-                            }
-                            initialFocus
-                          />
-                        </PopoverContent>
-                      </Popover>
-                    </div>
-                    <div>
-                      <Label htmlFor="imageUpload">
-                        Upload Expiry Date Image
-                      </Label>
-                      <Input
-                        id="imageUpload"
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        disabled={isUploading}
-                      />
-                      {isUploading && (
-                        <p className="text-sm text-gray-500">
-                          Processing image...
-                        </p>
+            <div className="grid gap-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Food Detection</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="flex gap-4">
+                      <Button
+                        onClick={isCameraOpen ? stopCamera : startCamera}
+                        className={isCameraOpen ? "bg-red-500" : ""}
+                      >
+                        <Camera className="mr-2 h-4 w-4" />
+                        {isCameraOpen ? "Stop Camera" : "Start Camera"}
+                      </Button>
+                      {isCameraOpen && (
+                        <Button
+                          onClick={captureAndDetect}
+                          disabled={isProcessing}
+                        >
+                          {isProcessing ? "Processing..." : "Detect"}
+                        </Button>
                       )}
                     </div>
+                    
+                    <div className="relative">
+                      <video
+                        ref={videoRef}
+                        className={`w-full max-w-[640px] ${isCameraOpen ? "" : "hidden"}`}
+                        autoPlay
+                        playsInline
+                        muted
+                      />
+                      <canvas
+                        ref={canvasRef}
+                        className="hidden"
+                      />
+                    </div>
                   </div>
-                  <Button type="submit" className="w-full">
-                    {editingItem ? "Update Food Item" : "Add Food Item"}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Your Food Inventory</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Food Item</TableHead>
-                      <TableHead>Quantity</TableHead>
-                      <TableHead>Expiry Date</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {foodItems.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell>{item.name}</TableCell>
-                        <TableCell>{item.quantity}</TableCell>
-                        <TableCell>
-                          {item.expiryDate
-                            ? format(new Date(item.expiryDate), "PPP")
-                            : "No Date"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            className={getExpiryStatus(item.expiryDate).color}
-                          >
-                            {getExpiryStatus(item.expiryDate).label}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            variant="outline"
-                            className="mr-2 hover:bg-blue-200 hover:text-white"
-                            onClick={() => handleEditClick(item)}
-                          >
-                            ✏️
-                          </Button>
-                          <Button
-                            variant="outline"
-                            className="hover:bg-red-200 hover:text-white"
-                            onClick={() => handleDeleteItem(item.id)}
-                          >
-                            <Trash2 className="text-red-600" />
-                          </Button>
-                        </TableCell>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Add New Food Item</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <form onSubmit={handleSaveItem} className="space-y-4">
+                    <div className="max-w-2xl">
+                      <div>
+                        <Label htmlFor="itemName">Food Item Name</Label>
+                        <Input
+                          id="itemName"
+                          value={newItem.name}
+                          onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                          placeholder="Enter food item name"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="quantity">Quantity</Label>
+                        <Input
+                          id="quantity"
+                          type="number"
+                          value={newItem.quantity}
+                          onChange={(e) => setNewItem({ ...newItem, quantity: e.target.value })}
+                          placeholder="Number of items"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="expiryDate">Expiry Date</Label>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant={"outline"}
+                              className={`w-full justify-start text-left font-normal ${
+                                !newItem.expiryDate && "text-muted-foreground"
+                              }`}
+                            >
+                              <CalendarIcon className="mr-2 h-4 w-4" />
+                              {newItem.expiryDate ? format(newItem.expiryDate, "PPP") : "Pick a date"}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0">
+                            <Calendar
+                              mode="single"
+                              selected={newItem.expiryDate}
+                              onSelect={(date) => setNewItem({ ...newItem, expiryDate: date })}
+                              initialFocus
+                            />
+                          </PopoverContent>
+                        </Popover>
+                      </div>
+                      <div>
+                        <Label htmlFor="imageUpload">Upload Expiry Date Image</Label>
+                        <Input
+                          id="imageUpload"
+                          type="file"
+                          accept="image/*"
+                          onChange={handleImageUpload}
+                        />
+                      </div>
+                    </div>
+                    <Button type="submit" className="w-full">
+                      Add Food Item
+                    </Button>
+                  </form>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Your Food Inventory</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Food Item</TableHead>
+                        <TableHead>Quantity</TableHead>
+                        <TableHead>Expiry Date</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Actions</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
+                    </TableHeader>
+                    <TableBody>
+                      {foodItems.map((item) => (
+                        <TableRow key={item.id}>
+                          <TableCell>{item.name}</TableCell>
+                          <TableCell>{item.quantity}</TableCell>
+                          <TableCell>
+                            {item.expiryDate ? format(new Date(item.expiryDate), "PPP") : "No Date"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={getExpiryStatus(item.expiryDate).color}>
+                              {getExpiryStatus(item.expiryDate).label}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="outline"
+                              className="mr-2 hover:bg-blue-200 hover:text-white"
+                              onClick={() => handleEditClick(item)}
+                            >
+                              ✏️
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="hover:bg-red-200 hover:text-white"
+                              onClick={() => handleDeleteItem(item.id)}
+                            >
+                              <Trash2 className="text-red-600" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </div>
           </div>
         </div>
-      </SidebarInset>
+        <ToastContainer position="top-right" />
+      </div>
     </SidebarProvider>
   );
 }

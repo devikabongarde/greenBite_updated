@@ -1,3 +1,13 @@
+import sys
+sys.path.append(r"C:\Users\Vinayak Kadate\yolov5")  # Add YOLOv5 path to sys.path
+import torch
+import cv2
+import numpy as np
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from models.common import DetectMultiBackend
+from utils.general import non_max_suppression, scale_boxes, check_img_size
+from utils.torch_utils import select_device
 import cv2
 import pytesseract
 import re
@@ -7,10 +17,34 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
+# Load YOLOv5 Model
+weights_path = r"C:\Users\Vinayak Kadate\yolov5\runs\train\exp8\weights\best.pt"
+device = select_device("cpu")  # Change to "cuda" if using GPU
+model = DetectMultiBackend(weights_path, device=device)
+stride, names = model.stride, model.names
+imgsz = check_img_size(640, s=stride)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
 
 # Set the path to Tesseract-OCR executable
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+def detect_objects(image):
+    """Perform object detection using YOLOv5 model"""
+    img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    img = torch.from_numpy(img).to(device).float() / 255.0
+    img = img.permute(2, 0, 1).unsqueeze(0)  # Reshape for YOLO model
+
+    with torch.no_grad():
+        pred = model(img)
+        pred = non_max_suppression(pred, 0.5, 0.45)
+
+    detected_items = []
+    for det in pred:
+        if len(det):
+            for *xyxy, conf, cls in det:
+                class_name = names[int(cls)]
+                detected_items.append({"item": class_name, "confidence": float(conf)})
+
+    return detected_items
 
 def preprocess_image(image):
     """Enhance image for better OCR accuracy."""
@@ -59,6 +93,21 @@ def options():
     return jsonify({"message": "CORS preflight successful"}), 200
 
 @app.route('/upload', methods=['POST'])
+@app.route('/predict', methods=['POST'])
+def predict():
+    """API to receive images and return detected food items"""
+    if 'image' not in request.files:
+        return jsonify({"error": "No image uploaded"}), 400
+
+    file = request.files['image']
+    file_bytes = np.frombuffer(file.read(), np.uint8)
+    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+    if image is None:
+        return jsonify({"error": "Invalid image"}), 400
+
+    detected_items = detect_objects(image)
+    return jsonify({"predictions": detected_items})
 def upload_image():
     if 'file' not in request.files:
         print("❌ No file found in request")

@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 44 100% 98%;
+    /* Light, soft beige */
+    --foreground: 0 0% 10%;
+    /* Dark slate */
+    --card: 0 0% 100%;
+    /* White for cards */
+    --card-foreground: 0 0% 10%;
+    /* Dark slate */
+    --popover: 0 0% 100%;
+    /* White for popovers */
+    --popover-foreground: 0 0% 10%;
+    /* Dark slate */
+    --primary: 144 38% 35%;
+    /* Fresh green */
+    --primary-foreground: 0 0% 100%;
+    /* White for contrast */
+    --secondary: 35 100% 96%;
+    /* Soft yellow for secondary elements */
+    --secondary-foreground: 0 0% 10%;
+    /* Dark slate */
+    --muted: 30 11% 90%;
+    /* Light beige */
+    --muted-foreground: 0 0% 40%;
+    /* Soft grey for muted foreground */
+    --accent: 11 100% 71%;
+    /* Warm orange */
+    --accent-foreground: 0 0% 10%;
+    /* Dark slate */
+    --destructive: 0 62.8% 30.6%;
+    /* Soft red for destructive */
+    --destructive-foreground: 0 0% 98%;
+    /* White for destructive foreground */
+    --border: 0 0% 90%;
+    /* Light grey border */
+    --input: 0 0% 90%;
+    /* Light grey input fields */
+    --ring: 144 38% 35%;
+    /* Fresh green */
+    --chart-1: 12 76% 61%;
+    /* Orange for chart */
+    --chart-2: 88 58% 39%;
+    /* Green for chart */
+    --chart-3: 43 74% 66%;
+    /* Yellow for chart */
+    --chart-4: 197 37% 24%;
+    /* Blue-green */
+    --chart-5: 27 87% 67%;
+    /* Bright orange */
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 98%;
+    /* Very light background */
+    --sidebar-foreground: 0 0% 20%;
+    /* Dark slate */
+    --sidebar-primary: 144 38% 35%;
+    /* Fresh green */
+    --sidebar-primary-foreground: 0 0% 98%;
+    /* White for text */
+    --sidebar-accent: 35 100% 96%;
+    /* Soft yellow */
+    --sidebar-accent-foreground: 0 0% 20%;
+    /* Dark slate */
+    --sidebar-border: 0 0% 89.8%;
+    /* Soft grey border */
+    --sidebar-ring: 44 100% 55%;
+    /* Orange highlight */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* 
+  .btn,
+  .button,
+  button {
+    @apply rounded-lg;
+  } */
+}

@@ -1,3 +1,4 @@
+// 2nd chance
 import axios from "axios";
 import { useRef, useState, useEffect } from "react";
 import { AppSidebar } from "@/components/ui/app-sidebar";
@@ -63,39 +64,28 @@ function ItemPage() {
     };
   }, []);
 
+  // Update the useEffect hook to fetch data immediately after login
   useEffect(() => {
-    if (!userId) return;
-
-    const foodItemsRef = ref(database, `users/${userId}/foodItems`);
-    const unsubscribe = onValue(foodItemsRef, (snapshot) => {
-      const items = [];
-      snapshot.forEach((childSnapshot) => {
-        const item = { id: childSnapshot.key, ...childSnapshot.val() };
-        items.push(item);
-      });
-      setFoodItems(items);
-
-      // Check for expiring items
-      items.forEach((item) => {
-        if (item.expiryDate && !alertedItemsRef.current.has(item.id)) {
-          const daysLeft = differenceInDays(
-            new Date(item.expiryDate),
-            new Date()
-          );
-
-          if (daysLeft > 0 && daysLeft <= 7) {
-            toast.warn(`⚠️ ${item.name} is expiring in ${daysLeft} days!`);
-          } else if (daysLeft < 0) {
-            toast.error(`❌ ${item.name} has expired!`);
-          }
-          alertedItemsRef.current.add(item.id);
-        }
-      });
+    const unsubscribe = auth.onAuthStateChanged((currentUser) => {
+      if (currentUser) {
+        const foodItemsRef = ref(database, `users/${currentUser.uid}/foodItems`);
+        onValue(foodItemsRef, (snapshot) => {
+          const items = [];
+          snapshot.forEach((childSnapshot) => {
+            const item = { id: childSnapshot.key, ...childSnapshot.val() };
+            items.push(item);
+          });
+          setFoodItems(items);
+        });
+      } else {
+        setFoodItems([]); // Clear items if user is not logged in
+      }
     });
 
     return () => unsubscribe();
-  }, [userId]);
+  }, []); // Remove userId dependency
 
+  // Remove the food items fetching from camera-related code
   const startCamera = async () => {
     try {
       const constraints = {

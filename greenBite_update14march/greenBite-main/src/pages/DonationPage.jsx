@@ -81,6 +81,20 @@ function DonationPage() {
       });
   };
 
+  const handleDelete = (itemId) => {
+    update(ref(database, `users/${userId}/foodItems/${itemId}`), {
+      status: "Deleted",
+    })
+      .then(() => {
+        toast.success("Food item deleted successfully!");
+        setFoodItems((prev) => prev.filter((item) => item.id !== itemId));
+      })
+      .catch((error) => {
+        toast.error("Failed to delete item: " + error.message);
+      });
+  };
+  
+
   return (
     <SidebarProvider>
       <AppSidebar />
@@ -133,30 +147,45 @@ function DonationPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {foodItems.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell>{item.name}</TableCell>
-                  <TableCell>{item.quantity}</TableCell>
-                  <TableCell>{item.expiryDate}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        donationStatus[item.id] === "In Progress"
-                          ? "warning"
-                          : "default"
-                      }
-                    >
-                      {donationStatus[item.id] || "Available"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Button onClick={() => handleDonate(item.id, item.name)}>
-                      Donate
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
+  {foodItems.map((item) => (
+    <TableRow key={item.id}>
+      <TableCell>{item.name}</TableCell>
+      <TableCell>{item.quantity}</TableCell>
+      <TableCell>{item.expiryDate}</TableCell>
+      <TableCell>
+        <Badge
+          variant={
+            item.status === "Accepted"
+              ? "success"
+              : item.status === "In Progress"
+              ? "warning"
+              : "default"
+          }
+        >
+          {item.status || "Available"}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        {item.status === "Accepted" ? (
+          <Button
+            onClick={() => handleDelete(item.id)}
+            className="bg-red-600 hover:bg-red-700 text-white"
+          >
+            Delete Food Item
+          </Button>
+        ) : (
+          <Button
+            onClick={() => handleDonate(item.id, item.name)}
+            disabled={item.status === "In Progress"}
+          >
+            Donate
+          </Button>
+        )}
+      </TableCell>
+    </TableRow>
+  ))}
+</TableBody>
+
           </Table>
         </div>
       </SidebarInset>
